@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 
 /* ---------- XP curve ---------- */
 const BASE_XP = 100;
@@ -12,6 +12,46 @@ const CATS = {
     work: { label: "Work / School", range: [35, 70] },
     epic: { label: "Major goal", range: [60, 100] },
 };
+
+/* ---------- Color profiles ---------- */
+// Four full themes: Dark and Light are the originals; Ocean and Sunset are
+// two extra profiles for variety. Each carries its own category color map
+// so quest tags stay legible against its own palette.
+const THEMES = {
+    dark: {
+        label: "Dark", isDark: true,
+        colors: { bg: "#12141a", panel: "#1a1d26", panel2: "#20242f", border: "#2c3140", text: "#e8e6df", textDim: "#8b8f9e", accent: "#5ec8a8", accentDim: "#3a8f77", amber: "#e0a940", danger: "#d9614f" },
+        catColors: { mundane: "#8b8f9e", personal: "#5ec8a8", work: "#e0836a", epic: "#e0a940" },
+    },
+    light: {
+        label: "Light", isDark: false,
+        colors: { bg: "#f4f1ea", panel: "#ffffff", panel2: "#ece7db", border: "#ddd5c2", text: "#26241d", textDim: "#767061", accent: "#1d7a5f", accentDim: "#2f9f7c", amber: "#b5780f", danger: "#b8402f" },
+        catColors: { mundane: "#767061", personal: "#1d7a5f", work: "#b5502f", epic: "#b5780f" },
+    },
+    ocean: {
+        label: "Ocean", isDark: true,
+        colors: { bg: "#0d1420", panel: "#141d2e", panel2: "#1a2540", border: "#243252", text: "#e5ecf5", textDim: "#7c8aa8", accent: "#4fb8e8", accentDim: "#3486ab", amber: "#e0a940", danger: "#e2685a" },
+        catColors: { mundane: "#7c8aa8", personal: "#4fb8e8", work: "#e08a5a", epic: "#e0a940" },
+    },
+    sunset: {
+        label: "Sunset", isDark: false,
+        colors: { bg: "#fdf3ec", panel: "#ffffff", panel2: "#f7e3d2", border: "#f0d2b8", text: "#3a2a1f", textDim: "#8a6f5c", accent: "#e0663f", accentDim: "#c9502c", amber: "#c77d1d", danger: "#c23b2f" },
+        catColors: { mundane: "#8a6f5c", personal: "#e0663f", work: "#b5502f", epic: "#c77d1d" },
+    },
+};
+
+/* ---------- AI provider presets ---------- */
+// One-click fills for popular OpenAI-compatible endpoints, so connecting a
+// custom AI is "pick a name, paste a key" instead of hunting down a URL.
+// True "log in with your AI account" OAuth isn't possible from a static
+// front-end (it needs a backend to hold the client secret), so this is the
+// closest practical shortcut without standing up a server.
+const PROVIDER_PRESETS = [
+    { name: "OpenAI", endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini" },
+    { name: "OpenRouter", endpoint: "https://openrouter.ai/api/v1/chat/completions", model: "openai/gpt-4o-mini" },
+    { name: "Groq", endpoint: "https://api.groq.com/openai/v1/chat/completions", model: "llama-3.1-8b-instant" },
+    { name: "Ollama (local)", endpoint: "http://localhost:11434/v1/chat/completions", model: "llama3.1" },
+];
 
 /* ---------- Timer bonus ---------- */
 // Small, capped focus bonus: +1 xp per 5 focused minutes, capped at 15 xp
@@ -48,19 +88,102 @@ function nextRank(level) {
     return RANKS.find((r) => r.min > level) || null;
 }
 
+/* ---------- Keyword-based no-AI grading ---------- */
+// Reliable, deterministic: same word -> same xp, every time. Longest keyword
+// match wins so multi-word phrases beat single words. 60+ keywords tracked,
+// covering everyday to-do list phrasing, not just the original core set.
+const KEYWORD_XP_TABLE = [
+    // mundane (5-15)
+    { word: "chores", category: "mundane", exp: 10 },
+    { word: "dishes", category: "mundane", exp: 8 },
+    { word: "dishwasher", category: "mundane", exp: 8 },
+    { word: "laundry", category: "mundane", exp: 8 },
+    { word: "trash", category: "mundane", exp: 6 },
+    { word: "recycling", category: "mundane", exp: 6 },
+    { word: "clean", category: "mundane", exp: 10 },
+    { word: "vacuum", category: "mundane", exp: 8 },
+    { word: "sweep", category: "mundane", exp: 6 },
+    { word: "mop", category: "mundane", exp: 7 },
+    { word: "groceries", category: "mundane", exp: 12 },
+    { word: "grocery shopping", category: "mundane", exp: 12 },
+    { word: "dust", category: "mundane", exp: 6 },
+    { word: "tidy", category: "mundane", exp: 8 },
+    { word: "declutter", category: "mundane", exp: 10 },
+    { word: "organize", category: "mundane", exp: 9 },
+    { word: "shower", category: "mundane", exp: 5 },
+    { word: "iron clothes", category: "mundane", exp: 8 },
+    { word: "mow", category: "mundane", exp: 12 },
+    { word: "water plants", category: "mundane", exp: 5 },
+    { word: "pay bills", category: "mundane", exp: 12 },
+    { word: "bills", category: "mundane", exp: 10 },
+    // personal (15-30)
+    { word: "workout", category: "personal", exp: 25 },
+    { word: "exercise", category: "personal", exp: 25 },
+    { word: "gym", category: "personal", exp: 25 },
+    { word: "run", category: "personal", exp: 20 },
+    { word: "jog", category: "personal", exp: 20 },
+    { word: "yoga", category: "personal", exp: 20 },
+    { word: "stretch", category: "personal", exp: 12 },
+    { word: "meditate", category: "personal", exp: 15 },
+    { word: "journal", category: "personal", exp: 15 },
+    { word: "self care", category: "personal", exp: 20 },
+    { word: "cook", category: "personal", exp: 18 },
+    { word: "meal prep", category: "personal", exp: 20 },
+    { word: "walk", category: "personal", exp: 15 },
+    { word: "hike", category: "personal", exp: 22 },
+    { word: "read", category: "personal", exp: 15 },
+    { word: "hobby", category: "personal", exp: 15 },
+    { word: "call mom", category: "personal", exp: 15 },
+    { word: "call friend", category: "personal", exp: 12 },
+    { word: "practice", category: "personal", exp: 18 },
+    { word: "sleep early", category: "personal", exp: 10 },
+    // work / school (35-70)
+    { word: "study", category: "work", exp: 40 },
+    { word: "homework", category: "work", exp: 40 },
+    { word: "exam", category: "work", exp: 55 },
+    { word: "quiz", category: "work", exp: 35 },
+    { word: "project", category: "work", exp: 50 },
+    { word: "meeting", category: "work", exp: 45 },
+    { word: "report", category: "work", exp: 45 },
+    { word: "assignment", category: "work", exp: 45 },
+    { word: "essay", category: "work", exp: 45 },
+    { word: "presentation", category: "work", exp: 50 },
+    { word: "shift", category: "work", exp: 40 },
+    { word: "class", category: "work", exp: 35 },
+    { word: "deadline", category: "work", exp: 55 },
+    { word: "email", category: "work", exp: 30 },
+    { word: "resume", category: "work", exp: 45 },
+    { word: "job application", category: "work", exp: 50 },
+    { word: "interview", category: "work", exp: 50 },
+    { word: "invoice", category: "work", exp: 40 },
+    { word: "budget", category: "work", exp: 35 },
+    { word: "taxes", category: "work", exp: 45 },
+    { word: "spreadsheet", category: "work", exp: 35 },
+    { word: "coding", category: "work", exp: 40 },
+    { word: "code review", category: "work", exp: 40 },
+    { word: "bug fix", category: "work", exp: 40 },
+    // epic (60-100)
+    { word: "marathon", category: "epic", exp: 80 },
+    { word: "certification", category: "epic", exp: 90 },
+    { word: "thesis", category: "epic", exp: 85 },
+    { word: "launch", category: "epic", exp: 90 },
+    { word: "degree", category: "epic", exp: 100 },
+    { word: "publish", category: "epic", exp: 85 },
+    { word: "start business", category: "epic", exp: 90 },
+    { word: "move out", category: "epic", exp: 75 },
+].sort((a, b) => b.word.length - a.word.length); // longest word first so "dishwasher" beats "dishes"
+
 function heuristicGrade(text) {
     const t = text.toLowerCase();
-    const workWords = ["exam", "project", "deadline", "meeting", "report", "assignment", "study", "presentation", "client", "thesis", "interview", "shift", "boss", "submit", "class", "homework", "essay"];
-    const epicWords = ["launch", "finish book", "marathon", "certification", "move out", "quit", "start business", "degree", "publish"];
-    const mundaneWords = ["dishes", "laundry", "trash", "clean", "vacuum", "shower", "brush", "tidy", "groceries", "dust"];
-    let cat = "personal";
-    if (epicWords.some((w) => t.includes(w))) cat = "epic";
-    else if (workWords.some((w) => t.includes(w))) cat = "work";
-    else if (mundaneWords.some((w) => t.includes(w))) cat = "mundane";
-    const [lo, hi] = CATS[cat].range;
+    const hit = KEYWORD_XP_TABLE.find((k) => t.includes(k.word));
+    if (hit) {
+        return { category: hit.category, exp: hit.exp, reason: `Keyword match: "${hit.word}" (no AI).` };
+    }
+    // No keyword matched - fall back to a rough length-based personal estimate.
+    const [lo, hi] = CATS.personal.range;
     const lengthBoost = Math.min(10, Math.floor(text.length / 20));
     const exp = Math.min(100, Math.round(lo + Math.random() * (hi - lo) + lengthBoost));
-    return { category: cat, exp, reason: "Estimated locally (no AI connected)." };
+    return { category: "personal", exp, reason: "No keyword matched - rough estimate (no AI)." };
 }
 
 async function claudeGrade(text) {
@@ -137,6 +260,162 @@ function dayKey(ts) {
     return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 }
 
+/* ---------- Sound effects ---------- */
+// Synthesized with the Web Audio API instead of an external audio file, so
+// there's nothing to fetch, no CORS risk once deployed, and no licensing to
+// track down - it just works everywhere, offline included.
+let sharedAudioCtx = null;
+function getAudioCtx() {
+    if (typeof window === "undefined") return null;
+    const Ctor = window.AudioContext || window.webkitAudioContext;
+    if (!Ctor) return null;
+    if (!sharedAudioCtx) sharedAudioCtx = new Ctor();
+    if (sharedAudioCtx.state === "suspended") sharedAudioCtx.resume().catch(() => {});
+    return sharedAudioCtx;
+}
+function playTone(freq, delayMs = 0, duration = 140, volume = 0.16) {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    const startAt = ctx.currentTime + delayMs / 1000;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, startAt);
+    gain.gain.exponentialRampToValueAtTime(volume, startAt + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(startAt);
+    osc.stop(startAt + duration / 1000 + 0.02);
+}
+function playCreateDing() {
+    try { playTone(720, 0, 110, 0.12); } catch (e) {}
+}
+function playCompleteDing() {
+    try { playTone(880, 0, 110, 0.14); playTone(1318, 90, 170, 0.14); } catch (e) {}
+}
+
+/* ---------- Reliable local save (with a redundant backup copy) ---------- */
+// A single localStorage write can be lost to a full quota, a mid-write tab
+// close, or Safari's storage eviction. Writing the same payload to a second
+// key means a corrupted/missing primary can self-heal from the backup on
+// next load instead of silently resetting progress.
+const STORAGE_KEY = "questlog-state";
+const STORAGE_BACKUP_KEY = "questlog-state-backup";
+
+function loadSavedState() {
+    for (const key of [STORAGE_KEY, STORAGE_BACKUP_KEY]) {
+        try {
+            const raw = localStorage.getItem(key);
+            if (!raw) continue;
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.tasks)) return parsed;
+        } catch (e) { /* try the next key */ }
+    }
+    return null;
+}
+function saveState(s) {
+    try {
+        const json = JSON.stringify(s);
+        localStorage.setItem(STORAGE_KEY, json);
+        localStorage.setItem(STORAGE_BACKUP_KEY, json);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+function clearSavedState() {
+    try {
+        localStorage.removeItem(STORAGE_KEY);
+        localStorage.removeItem(STORAGE_BACKUP_KEY);
+    } catch (e) {}
+}
+
+/* ---------- Badges ---------- */
+// Badge tracking is independent of XP category - it scans completed task
+// text for goal-area keywords, so e.g. "study for exam" counts toward
+// Studying even though its XP category is "work". Six areas cover almost
+// every keyword in the grading table above.
+const BADGE_KEYWORDS = {
+    fitness: ["workout", "exercise", "gym", "run", "jog", "walk", "yoga", "stretch", "lift", "cardio", "hike", "bike", "swim", "sport", "training", "push up", "pushup", "squat"],
+    studying: ["study", "homework", "exam", "essay", "assignment", "class", "read", "thesis", "research", "quiz", "lecture", "notes", "review", "course", "test", "flashcard"],
+    work: ["work", "meeting", "report", "project", "deadline", "client", "email", "presentation", "shift", "task", "boss", "submit", "invoice", "call", "interview", "spreadsheet", "resume", "job application", "coding", "code review", "bug", "budget", "taxes"],
+    chores: ["chores", "dishes", "laundry", "trash", "recycling", "clean", "vacuum", "sweep", "mop", "groceries", "dust", "tidy", "declutter", "organize", "mow", "water plants", "bills", "iron"],
+    selfcare: ["meditate", "journal", "self care", "cook", "meal prep", "hobby", "call mom", "call friend", "relax", "nap", "sleep early", "therapy", "rest"],
+    majorgoals: ["marathon", "certification", "thesis", "launch", "degree", "publish", "start business", "move out", "goal", "milestone", "quit"],
+};
+const BADGE_LABELS = { fitness: "Fitness", studying: "Studying", work: "Work", chores: "Chores", selfcare: "Self-Care", majorgoals: "Major Goals" };
+const BADGE_COUNT_NAMES = {
+    fitness: ["First Rep", "Warming Up", "Getting Stronger", "Iron Habit", "Gym Regular", "Fitness Fanatic"],
+    studying: ["First Study Session", "Note Taker", "Diligent Student", "Bookworm", "Scholar", "Honor Roll"],
+    work: ["First Task Done", "Getting Things Done", "Reliable", "Workhorse", "Go-Getter", "Top Performer"],
+    chores: ["First Chore", "Tidying Up", "Housekeeper", "Neat Freak", "Domestic Pro", "Spotless"],
+    selfcare: ["First Check-In", "Taking a Breath", "Self-Care Streak", "Balanced", "Recharged", "Mindful Master"],
+    majorgoals: ["First Milestone", "Big Mover", "Goal Getter", "Achiever", "Trailblazer", "Legend"],
+};
+const BADGE_COUNT_THRESHOLDS = [1, 3, 5, 10, 20, 30];
+const BADGE_STREAK_THRESHOLDS = [3, 7];
+
+function badgeMatchesCategory(text, category) {
+    const t = text.toLowerCase();
+    return BADGE_KEYWORDS[category].some((w) => t.includes(w));
+}
+
+function longestStreak(dayKeys) {
+    if (dayKeys.length === 0) return 0;
+    const uniqueSorted = Array.from(new Set(dayKeys)).sort();
+    const asDates = uniqueSorted.map((k) => {
+        const [y, m, d] = k.split("-").map(Number);
+        return new Date(y, m, d).getTime();
+    });
+    let best = 1;
+    let cur = 1;
+    const dayMs = 24 * 60 * 60 * 1000;
+    for (let i = 1; i < asDates.length; i++) {
+        if (asDates[i] - asDates[i - 1] === dayMs) {
+            cur += 1;
+            best = Math.max(best, cur);
+        } else {
+            cur = 1;
+        }
+    }
+    return best;
+}
+
+function buildBadges(tasks) {
+    const done = tasks.filter((t) => t.done);
+    const badges = [];
+    Object.keys(BADGE_KEYWORDS).forEach((category) => {
+        const matches = done.filter((t) => badgeMatchesCategory(t.text, category));
+        const count = matches.length;
+        const streak = longestStreak(matches.map((t) => dayKey(t.completedAt || t.createdAt)));
+        BADGE_COUNT_THRESHOLDS.forEach((threshold, i) => {
+            badges.push({
+                id: `${category}-count-${threshold}`,
+                category,
+                label: BADGE_COUNT_NAMES[category][i],
+                description: `Complete ${threshold} ${BADGE_LABELS[category].toLowerCase()} task${threshold > 1 ? "s" : ""}.`,
+                earned: count >= threshold,
+                progress: Math.min(count, threshold),
+                target: threshold,
+            });
+        });
+        BADGE_STREAK_THRESHOLDS.forEach((threshold) => {
+            badges.push({
+                id: `${category}-streak-${threshold}`,
+                category,
+                label: `${threshold}-Day ${BADGE_LABELS[category]} Streak`,
+                description: `Complete a ${BADGE_LABELS[category].toLowerCase()} task ${threshold} days in a row.`,
+                earned: streak >= threshold,
+                progress: Math.min(streak, threshold),
+                target: threshold,
+            });
+        });
+    });
+    return badges;
+}
+
 export default function QuestLog() {
     const [theme, setTheme] = useState("dark");
     const [tasks, setTasks] = useState([]);
@@ -151,27 +430,29 @@ export default function QuestLog() {
     const [screenTimeInput, setScreenTimeInput] = useState("");
     const [calMonth, setCalMonth] = useState(() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() }; });
     const [calSelected, setCalSelected] = useState(null);
-    const [settingsSection, setSettingsSection] = useState("general"); // general | ai | guided | screentime
+    const [settingsSection, setSettingsSection] = useState("general"); // general | ai | guided | screentime | save
     const [activeTimer, setActiveTimer] = useState(null); // { taskId, startedAt }
     const [tick, setTick] = useState(0); // forces re-render each second while a timer runs
     const [addMenuOpen, setAddMenuOpen] = useState(false);
+    const [soundEnabled, setSoundEnabled] = useState(true);
+    const [importStatus, setImportStatus] = useState(null); // { ok, msg } | null
+    const [keywordFilter, setKeywordFilter] = useState("");
+    const fileInputRef = useRef(null);
 
     useEffect(() => {
-        (async () => {
-            try {
-                const raw = localStorage.getItem("questlog-state");
-                if (raw) {
-                    const s = JSON.parse(raw);
-                    setTasks(s.tasks || []);
-                    setTheme(s.theme || "dark");
-                    setAiMode(s.aiMode || "builtin");
-                    setCustomProvider(s.customProvider || { endpoint: "", apiKey: "", model: "" });
-                    setScreenTimeLog(s.screenTimeLog || []);
-                    setActiveTimer(s.activeTimer || null);
-                }
-            } catch (e) { }
-            setLoaded(true);
-        })();
+        try {
+            const s = loadSavedState();
+            if (s) {
+                setTasks(s.tasks || []);
+                setTheme(s.theme || "dark");
+                setAiMode(s.aiMode || "builtin");
+                setCustomProvider(s.customProvider || { endpoint: "", apiKey: "", model: "" });
+                setScreenTimeLog(s.screenTimeLog || []);
+                setActiveTimer(s.activeTimer || null);
+                setSoundEnabled(s.soundEnabled !== false);
+            }
+        } catch (e) { }
+        setLoaded(true);
     }, []);
 
     useEffect(() => {
@@ -182,11 +463,9 @@ export default function QuestLog() {
 
     useEffect(() => {
         if (!loaded) return;
-        const s = { tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer };
-        try {
-            localStorage.setItem("questlog-state", JSON.stringify(s));
-        } catch (e) { }
-    }, [tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, loaded]);
+        const s = { tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, soundEnabled };
+        saveState(s);
+    }, [tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, soundEnabled, loaded]);
 
     const levelInfo = useCallback((xp) => {
         let level = 1;
@@ -215,6 +494,7 @@ export default function QuestLog() {
         if (!text) return;
         setInput("");
         setAddMenuOpen(false);
+        if (soundEnabled) playCreateDing();
         const id = uid();
         const draft = { id, text, exp: null, category: null, reason: "", done: false, pending: true, createdAt: Date.now(), completedAt: null, timeBonus: 0, timedSeconds: 0 };
         setTasks((t) => [draft, ...t]);
@@ -234,6 +514,7 @@ export default function QuestLog() {
     function completeTask(id, bonus) {
         const task = tasks.find((t) => t.id === id);
         if (!task || task.done || task.pending) return;
+        if (soundEnabled) playCompleteDing();
         const timeBonus = bonus || 0;
         const prevLevel = levelInfo(totalXp).level;
         const nextTotal = totalXp + (task.exp || 0) + timeBonus;
@@ -272,20 +553,80 @@ export default function QuestLog() {
         setScreenTimeInput("");
     }
 
+    function exportSave() {
+        const payload = {
+            saveVersion: 2,
+            exportedAt: Date.now(),
+            app: "questlog",
+            data: { tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, soundEnabled },
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        const stamp = new Date().toISOString().slice(0, 10);
+        a.href = url;
+        a.download = `questlog-save-${stamp}.json`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+        setImportStatus({ ok: true, msg: "Save file downloaded." });
+    }
+
+    function triggerImportPicker() {
+        setImportStatus(null);
+        fileInputRef.current?.click();
+    }
+
+    function handleImportFile(e) {
+        const file = e.target.files?.[0];
+        e.target.value = "";
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const parsed = JSON.parse(reader.result);
+                const d = parsed.data || parsed;
+                if (!Array.isArray(d.tasks)) throw new Error("Missing tasks array.");
+                setTasks(d.tasks || []);
+                setTheme(d.theme || "dark");
+                setAiMode(d.aiMode || "builtin");
+                setCustomProvider(d.customProvider || { endpoint: "", apiKey: "", model: "" });
+                setScreenTimeLog(d.screenTimeLog || []);
+                setActiveTimer(d.activeTimer || null);
+                setSoundEnabled(d.soundEnabled !== false);
+                setImportStatus({ ok: true, msg: `Loaded save (${(d.tasks || []).length} tasks).` });
+            } catch (err) {
+                setImportStatus({ ok: false, msg: "Couldn't read that file - is it a Questlog save?" });
+            }
+        };
+        reader.onerror = () => setImportStatus({ ok: false, msg: "Couldn't read that file." });
+        reader.readAsText(file);
+    }
+
+    function resetSave() {
+        if (!window.confirm("Reset all Questlog data? This deletes every quest, badge progress, and setting. This can't be undone unless you've exported a save file.")) return;
+        clearSavedState();
+        setTasks([]);
+        setTheme("dark");
+        setAiMode("builtin");
+        setCustomProvider({ endpoint: "", apiKey: "", model: "" });
+        setScreenTimeLog([]);
+        setActiveTimer(null);
+        setSoundEnabled(true);
+        setImportStatus({ ok: true, msg: "Everything reset." });
+    }
+
     const active = tasks.filter((t) => !t.done);
     const completed = tasks.filter((t) => t.done).sort((a, b) => b.completedAt - a.completedAt);
+    const badges = useMemo(() => buildBadges(tasks), [tasks]);
+    const earnedBadgeCount = badges.filter((b) => b.earned).length;
 
-    const dark = theme === "dark";
-    const colors = dark
-        ? { bg: "#12141a", panel: "#1a1d26", panel2: "#20242f", border: "#2c3140", text: "#e8e6df", textDim: "#8b8f9e", accent: "#5ec8a8", accentDim: "#3a8f77", amber: "#e0a940", danger: "#d9614f" }
-        : { bg: "#f4f1ea", panel: "#ffffff", panel2: "#ece7db", border: "#ddd5c2", text: "#26241d", textDim: "#767061", accent: "#1d7a5f", accentDim: "#2f9f7c", amber: "#b5780f", danger: "#b8402f" };
+    const themeObj = THEMES[theme] || THEMES.dark;
+    const dark = themeObj.isDark;
+    const colors = themeObj.colors;
 
-    const catColor = (cat) => {
-        const map = dark
-            ? { mundane: "#8b8f9e", personal: "#5ec8a8", work: "#e0836a", epic: "#e0a940" }
-            : { mundane: "#767061", personal: "#1d7a5f", work: "#b5502f", epic: "#b5780f" };
-        return map[cat] || map.personal;
-    };
+    const catColor = (cat) => themeObj.catColors[cat] || themeObj.catColors.personal;
 
     const navItem = (id, label) => (
         <button
@@ -347,6 +688,8 @@ export default function QuestLog() {
                         {navItem("quests", "Quests")}
                         {navItem("completed", "Completed")}
                         {navItem("calendar", "Calendar")}
+                        {navItem("badges", `Badges (${earnedBadgeCount}/${badges.length})`)}
+                        {navItem("customization", "Customization")}
                         {navItem("settings", "Settings")}
                     </div>
                 </div>
@@ -363,7 +706,7 @@ export default function QuestLog() {
                         </button>
                         <div>
                             <div style={{ fontFamily: "'Fraunces', serif", fontSize: 26, fontWeight: 600, letterSpacing: -0.5 }}>
-                                {{ quests: "Questlog", completed: "Completed", calendar: "Calendar", settings: "Settings" }[view]}
+                                {{ quests: "Questlog", completed: "Completed", calendar: "Calendar", badges: "Badges", customization: "Customization", settings: "Settings" }[view]}
                             </div>
                         </div>
                     </div>
@@ -410,7 +753,7 @@ export default function QuestLog() {
                                     </button>
                                     <button className="ql-btn" disabled={!!activeTimer} onClick={() => addTask(true)}
                                         style={{ display: "block", width: "100%", textAlign: "left", padding: "10px 14px", background: "transparent", border: "none", borderTop: `1px solid ${colors.border}`, color: activeTimer ? colors.textDim : colors.text, fontSize: 13, opacity: activeTimer ? 0.5 : 1 }}>
-                                        ⏱ Add &amp; start focus timer
+                                        ⏱ Add &amp; start focus stopwatch
                                         <div style={{ fontSize: 10.5, color: colors.textDim, marginTop: 2 }}>+1 xp per 5 focused min, capped at +{TIMER_BONUS_CAP}</div>
                                     </button>
                                 </div>
@@ -520,10 +863,75 @@ export default function QuestLog() {
                     </div>
                 )}
 
+                {view === "customization" && (
+                    <div>
+                        <div style={{ fontSize: 12.5, color: colors.textDim, marginBottom: 16, lineHeight: 1.6 }}>
+                            Pick a color profile for the whole app.
+                        </div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 10 }}>
+                            {Object.entries(THEMES).map(([key, t]) => {
+                                const selected = theme === key;
+                                return (
+                                    <button key={key} className="ql-btn" onClick={() => setTheme(key)}
+                                        style={{
+                                            textAlign: "left", padding: 14, borderRadius: 12,
+                                            border: `2px solid ${selected ? t.colors.accent : colors.border}`,
+                                            background: t.colors.bg,
+                                        }}>
+                                        <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                                            <span style={{ width: 18, height: 18, borderRadius: "50%", background: t.colors.accent, display: "inline-block" }} />
+                                            <span style={{ width: 18, height: 18, borderRadius: "50%", background: t.colors.amber, display: "inline-block" }} />
+                                            <span style={{ width: 18, height: 18, borderRadius: "50%", background: t.colors.panel2, border: `1px solid ${t.colors.border}`, display: "inline-block" }} />
+                                        </div>
+                                        <div style={{ fontFamily: "'Fraunces', serif", fontSize: 15, fontWeight: 600, color: t.colors.text, marginBottom: 3 }}>{t.label}</div>
+                                        <div style={{ fontSize: 11, color: t.colors.textDim }}>{selected ? "Active" : t.isDark ? "Dark" : "Light"}</div>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {view === "badges" && (
+                    <div>
+                        <div style={{ fontSize: 12.5, color: colors.textDim, marginBottom: 16, lineHeight: 1.6 }}>
+                            Earned by staying consistent - {earnedBadgeCount} of {badges.length} unlocked. Badges track
+                            completed tasks by keyword, separate from XP category, across six goal areas.
+                        </div>
+                        {Object.keys(BADGE_LABELS).map((category) => (
+                            <div key={category} style={{ marginBottom: 22 }}>
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                                    {BADGE_LABELS[category]}
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 8 }}>
+                                    {badges.filter((b) => b.category === category).map((b) => (
+                                        <div key={b.id} title={b.description}
+                                            style={{
+                                                background: b.earned ? colors.panel2 : colors.panel,
+                                                border: `1px solid ${b.earned ? colors.accent : colors.border}`,
+                                                borderRadius: 10, padding: "12px 12px", opacity: b.earned ? 1 : 0.7,
+                                            }}>
+                                            <div style={{ fontSize: 20, marginBottom: 4 }}>{b.earned ? "🏅" : "🔒"}</div>
+                                            <div style={{ fontSize: 12.5, fontWeight: 600, color: b.earned ? colors.accent : colors.text, marginBottom: 3 }}>{b.label}</div>
+                                            <div style={{ fontSize: 10.5, color: colors.textDim, marginBottom: 6, lineHeight: 1.4 }}>{b.description}</div>
+                                            {!b.earned && (
+                                                <div style={{ height: 5, borderRadius: 3, background: colors.border, overflow: "hidden" }}>
+                                                    <div style={{ height: "100%", width: `${Math.round((b.progress / b.target) * 100)}%`, background: colors.accentDim, borderRadius: 3 }} />
+                                                </div>
+                                            )}
+                                            {!b.earned && <div style={{ fontSize: 10, color: colors.textDim, marginTop: 3 }}>{b.progress}/{b.target}</div>}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
                 {view === "settings" && (
                     <div>
                         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-                            {[["general", "General"], ["ai", "AI engine"], ["guided", "Guided hand"], ["screentime", "Screen time"]].map(([id, label]) => (
+                            {[["general", "General"], ["ai", "AI engine"], ["guided", "Guided hand"], ["screentime", "Screen time"], ["keywords", "Keywords"], ["dev", "Developer"], ["save", "Save file"]].map(([id, label]) => (
                                 <button key={id} className="ql-btn" onClick={() => setSettingsSection(id)}
                                     style={{ padding: "7px 12px", borderRadius: 8, border: `1px solid ${settingsSection === id ? colors.accent : colors.border}`, background: settingsSection === id ? colors.panel2 : "transparent", color: colors.text, fontSize: 12.5 }}>
                                     {label}
@@ -534,11 +942,16 @@ export default function QuestLog() {
                         {settingsSection === "general" && (
                             <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 18 }}>
                                 <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Theme</div>
+                                <div style={{ fontSize: 12.5, color: colors.textDim, lineHeight: 1.6, marginBottom: 18 }}>
+                                    Currently <strong style={{ color: colors.accent }}>{themeObj.label}</strong>. Color profiles have moved to
+                                    <strong> Customization</strong> in the menu — open the ☰ menu and pick from four looks.
+                                </div>
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Sound effects</div>
                                 <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
-                                    {["light", "dark"].map((tm) => (
-                                        <button key={tm} className="ql-btn" onClick={() => setTheme(tm)}
-                                            style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${theme === tm ? colors.accent : colors.border}`, background: theme === tm ? colors.panel2 : "transparent", color: colors.text, fontSize: 13, textTransform: "capitalize" }}>
-                                            {tm}
+                                    {[{ id: true, label: "On" }, { id: false, label: "Off" }].map((opt) => (
+                                        <button key={String(opt.id)} className="ql-btn" onClick={() => setSoundEnabled(opt.id)}
+                                            style={{ flex: 1, padding: "8px 0", borderRadius: 8, border: `1px solid ${soundEnabled === opt.id ? colors.accent : colors.border}`, background: soundEnabled === opt.id ? colors.panel2 : "transparent", color: colors.text, fontSize: 13 }}>
+                                            {opt.label}
                                         </button>
                                     ))}
                                 </div>
@@ -574,16 +987,27 @@ export default function QuestLog() {
                                 </div>
                                 {aiMode === "custom" && (
                                     <div style={{ display: "flex", flexDirection: "column", gap: 8, background: colors.panel2, padding: 12, borderRadius: 8 }}>
+                                        <div style={{ fontSize: 11, color: colors.textDim, marginBottom: 2 }}>Quick fill a preset, then paste your key:</div>
+                                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
+                                            {PROVIDER_PRESETS.map((p) => (
+                                                <button key={p.name} className="ql-btn" onClick={() => setCustomProvider((prev) => ({ ...prev, endpoint: p.endpoint, model: p.model }))}
+                                                    style={{ padding: "5px 10px", borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, fontSize: 11.5 }}>
+                                                    {p.name}
+                                                </button>
+                                            ))}
+                                        </div>
                                         <input placeholder="Endpoint URL (OpenAI-compatible /chat/completions)" value={customProvider.endpoint}
                                             onChange={(e) => setCustomProvider((p) => ({ ...p, endpoint: e.target.value }))}
                                             style={{ padding: "8px 10px", borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, fontSize: 12.5 }} />
                                         <input placeholder="Model name (e.g. gpt-4o-mini)" value={customProvider.model}
                                             onChange={(e) => setCustomProvider((p) => ({ ...p, model: e.target.value }))}
                                             style={{ padding: "8px 10px", borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, fontSize: 12.5 }} />
-                                        <input placeholder="API key" type="password" value={customProvider.apiKey}
+                                        <input placeholder="API key (leave blank for Ollama/local)" type="password" value={customProvider.apiKey}
                                             onChange={(e) => setCustomProvider((p) => ({ ...p, apiKey: e.target.value }))}
                                             style={{ padding: "8px 10px", borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.panel, color: colors.text, fontSize: 12.5 }} />
-                                        <div style={{ fontSize: 11, color: colors.textDim, lineHeight: 1.5 }}>Stored only in this app's saved data on this device, in plain text.</div>
+                                        <div style={{ fontSize: 11, color: colors.textDim, lineHeight: 1.5 }}>
+                                            Stored only in this app's saved data on this device
+                                        </div>
                                     </div>
                                 )}
                                 {aiMode === "builtin" && <div style={{ fontSize: 11.5, color: colors.textDim, lineHeight: 1.5 }}>Every new task is sent to Claude to judge its category and XP value.</div>}
@@ -632,6 +1056,131 @@ export default function QuestLog() {
                                         <span style={{ color: colors.danger, fontFamily: "'JetBrains Mono', monospace" }}>{l.penalty > 0 ? `-${l.penalty}` : "0"}</span>
                                     </div>
                                 ))}
+                            </div>
+                        )}
+
+                        {settingsSection === "keywords" && (
+                            <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 18 }}>
+                                <div style={{ fontSize: 12.5, color: colors.textDim, marginBottom: 12, lineHeight: 1.6 }}>
+                                    Every word the no-AI grading and badge systems watch for. Search to filter either list.
+                                </div>
+                                <input value={keywordFilter} onChange={(e) => setKeywordFilter(e.target.value)} placeholder="Filter keywords..."
+                                    style={{ width: "100%", padding: "9px 12px", borderRadius: 8, border: `1px solid ${colors.border}`, background: colors.panel2, color: colors.text, fontSize: 13, marginBottom: 16 }} />
+
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>
+                                    XP grading keywords ({KEYWORD_XP_TABLE.length})
+                                </div>
+                                {Object.keys(CATS).map((cat) => {
+                                    const rows = KEYWORD_XP_TABLE.filter((k) => k.category === cat && k.word.includes(keywordFilter.toLowerCase()));
+                                    if (rows.length === 0) return null;
+                                    return (
+                                        <div key={cat} style={{ marginBottom: 12 }}>
+                                            <div style={{ fontSize: 11.5, fontWeight: 600, color: catColor(cat), marginBottom: 4 }}>{CATS[cat].label}</div>
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                                {rows.map((k) => (
+                                                    <span key={k.word} style={{ fontSize: 11.5, padding: "4px 9px", borderRadius: 20, background: colors.panel2, border: `1px solid ${colors.border}`, color: colors.text, fontFamily: "'JetBrains Mono', monospace" }}>
+                                                        {k.word} <span style={{ color: colors.amber }}>+{k.exp}</span>
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+
+                                <div style={{ fontSize: 12, color: colors.textDim, margin: "18px 0 8px", textTransform: "uppercase", letterSpacing: 0.5 }}>
+                                    Badge tracking keywords
+                                </div>
+                                {Object.keys(BADGE_LABELS).map((cat) => {
+                                    const rows = BADGE_KEYWORDS[cat].filter((w) => w.includes(keywordFilter.toLowerCase()));
+                                    if (rows.length === 0) return null;
+                                    return (
+                                        <div key={cat} style={{ marginBottom: 12 }}>
+                                            <div style={{ fontSize: 11.5, fontWeight: 600, color: colors.accent, marginBottom: 4 }}>{BADGE_LABELS[cat]}</div>
+                                            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                                                {rows.map((w) => (
+                                                    <span key={w} style={{ fontSize: 11.5, padding: "4px 9px", borderRadius: 20, background: colors.panel2, border: `1px solid ${colors.border}`, color: colors.text, fontFamily: "'JetBrains Mono', monospace" }}>
+                                                        {w}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
+
+                        {settingsSection === "dev" && (
+                            <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 18 }}>
+                                <div style={{ fontSize: 12.5, color: colors.textDim, marginBottom: 14, lineHeight: 1.6 }}>
+                                    Raw diagnostics for debugging - not needed for normal use.
+                                </div>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+                                    {[
+                                        ["Total tasks", tasks.length],
+                                        ["Active", active.length],
+                                        ["Completed", completed.length],
+                                        ["Badges earned", `${earnedBadgeCount} / ${badges.length}`],
+                                        ["Level", level],
+                                        ["Total XP", totalXp],
+                                        ["Theme", themeObj.label],
+                                        ["AI mode", aiMode],
+                                    ].map(([label, val]) => (
+                                        <div key={label} style={{ background: colors.panel2, border: `1px solid ${colors.border}`, borderRadius: 8, padding: "8px 10px" }}>
+                                            <div style={{ fontSize: 10.5, color: colors.textDim, textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</div>
+                                            <div style={{ fontSize: 14, fontFamily: "'JetBrains Mono', monospace", color: colors.text }}>{String(val)}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Storage keys</div>
+                                <div style={{ fontSize: 11.5, fontFamily: "'JetBrains Mono', monospace", color: colors.textDim, marginBottom: 16, lineHeight: 1.7 }}>
+                                    {STORAGE_KEY} (primary)<br />{STORAGE_BACKUP_KEY} (backup)
+                                </div>
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 6, textTransform: "uppercase", letterSpacing: 0.5 }}>Raw save payload</div>
+                                <pre className="ql-scroll" style={{ maxHeight: 240, overflow: "auto", background: colors.panel2, border: `1px solid ${colors.border}`, borderRadius: 8, padding: 10, fontSize: 10.5, color: colors.textDim, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                                    {JSON.stringify({ tasks, theme, aiMode, customProvider: { ...customProvider, apiKey: customProvider.apiKey ? "***" : "" }, screenTimeLog, activeTimer, soundEnabled }, null, 2)}
+                                </pre>
+                            </div>
+                        )}
+
+                        {settingsSection === "save" && (
+                            <div style={{ background: colors.panel, border: `1px solid ${colors.border}`, borderRadius: 12, padding: 18 }}>
+                                <div style={{ fontSize: 12.5, color: colors.textDim, marginBottom: 16, lineHeight: 1.6 }}>
+                                    Everything - quests, completed history, badge progress, screen time log, theme, and
+                                    AI settings - lives in one save file. Export it to back it up or move it to another
+                                    device; import to restore it. Progress also autosaves to this browser continuously,
+                                    with a redundant backup copy in case one write gets interrupted.
+                                </div>
+
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Export</div>
+                                <button className="ql-btn" onClick={exportSave}
+                                    style={{ width: "100%", padding: "12px 0", borderRadius: 8, border: "none", background: colors.accent, color: dark ? "#0b1613" : "#fff", fontWeight: 600, fontSize: 13.5, marginBottom: 20 }}>
+                                    ⬇ Download save file
+                                </button>
+
+                                <div style={{ fontSize: 12, color: colors.textDim, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Import</div>
+                                <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={handleImportFile} style={{ display: "none" }} />
+                                <button className="ql-btn" onClick={triggerImportPicker}
+                                    style={{ width: "100%", padding: "12px 0", borderRadius: 8, border: `1px solid ${colors.border}`, background: colors.panel2, color: colors.text, fontWeight: 600, fontSize: 13.5, marginBottom: 20 }}>
+                                    ⬆ Choose save file to import
+                                </button>
+                                <div style={{ fontSize: 11, color: colors.textDim, marginTop: -12, marginBottom: 20, lineHeight: 1.5 }}>
+                                    Importing replaces everything currently in the app - export a backup first if you want to keep it.
+                                </div>
+
+                                <div style={{ fontSize: 12, color: colors.danger, marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Reset</div>
+                                <button className="ql-btn" onClick={resetSave}
+                                    style={{ width: "100%", padding: "12px 0", borderRadius: 8, border: `1px solid ${colors.danger}`, background: "transparent", color: colors.danger, fontWeight: 600, fontSize: 13.5 }}>
+                                    🗑 Reset all data
+                                </button>
+                                <div style={{ fontSize: 11, color: colors.textDim, marginTop: 8, lineHeight: 1.5 }}>
+                                    Wipes every quest, badge, and setting on this device. Asks for confirmation first and can't be undone.
+                                </div>
+
+                                {importStatus && (
+                                    <div style={{ marginTop: 14, padding: "10px 12px", borderRadius: 8, background: importStatus.ok ? colors.panel2 : "transparent", border: `1px solid ${importStatus.ok ? colors.accent : colors.danger}`, color: importStatus.ok ? colors.accent : colors.danger, fontSize: 12.5 }}>
+                                        {importStatus.msg}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
