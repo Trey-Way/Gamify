@@ -49,7 +49,7 @@ export default function AiSettings({ ai, onSetAi }) {
                     <TextInput placeholder={`Model (default: ${def.defaultModel || "required"})`} value={cfg.model || ""} onChange={(e) => setCfg({ model: e.target.value.trim() })} />
                     <TextInput placeholder={def.keyRequired ? "API key" : "API key (optional)"} type="password" autoComplete="off" value={cfg.apiKey || ""} onChange={(e) => setCfg({ apiKey: e.target.value.trim() })} />
                     <div style={{ fontSize: 11, color: colors.textDim, lineHeight: 1.5 }}>
-                        {def.keyHelp} Your key stays on this device, is sent only to {def.label}, and is left out of exported save files.
+                        {def.keyHelp.replace(/\.?$/, ".")} Your key stays on this device, is sent only to {def.label}, and is left out of exported save files.
                     </div>
                 </div>
             )}
