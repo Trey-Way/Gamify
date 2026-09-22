@@ -6,7 +6,7 @@ import { buildBadges } from "./lib/badges.js";
 import { totalAdjustment, screenTimePenalty } from "./lib/xpAdjustments.js";
 import { uid } from "./lib/dates.js";
 import { playCreateDing, playCompleteDing } from "./lib/sound.js";
-import { loadSavedState, saveState, clearSavedState } from "./lib/storage.js";
+import { loadSavedState, saveState, clearSavedState, loadNewerIdbState } from "./lib/storage.js";
 import { ThemeCtx, SERIF } from "./components/theme.js";
 import LevelCard from "./components/LevelCard.jsx";
 import MenuDrawer from "./components/MenuDrawer.jsx";
@@ -37,7 +37,11 @@ export default function QuestLog() {
     const [screenTimeLog, setScreenTimeLog] = useState(saved.screenTimeLog || []);
     const [activeTimer, setActiveTimer] = useState(saved.activeTimer || null); // { taskId, startedAt }
     const [soundEnabled, setSoundEnabled] = useState(saved.soundEnabled !== false);
-    const [view, setView] = useState("quests");
+    // Notifications deep-link with ?view=summary etc.
+    const [view, setView] = useState(() => {
+        const v = new URLSearchParams(window.location.search).get("view");
+        return v && VIEW_TITLES[v] ? v : "quests";
+    });
     const [menuOpen, setMenuOpen] = useState(false);
     const [levelUpFlash, setLevelUpFlash] = useState(null);
     const [importStatus, setImportStatus] = useState(null); // { ok, msg } | null
@@ -49,6 +53,15 @@ export default function QuestLog() {
         const iv = setInterval(() => setNow(Date.now()), activeTimer ? 1000 : 30000);
         return () => clearInterval(iv);
     }, [activeTimer]);
+
+    // If IndexedDB holds a newer save than localStorage (evicted or lost
+    // write), restore it once on startup.
+    const savedAt = saved.savedAt || 0;
+    useEffect(() => {
+        let cancelled = false;
+        loadNewerIdbState(savedAt).then((s) => { if (s && !cancelled) applyState(s); });
+        return () => { cancelled = true; };
+    }, [savedAt]);
 
     const snapshot = { tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled };
     useEffect(() => {
@@ -188,6 +201,12 @@ export default function QuestLog() {
 
     const themeObj = THEMES[theme] || THEMES.dark;
     const colors = themeObj.colors;
+    // Keep the page behind the app (overscroll, status bar) on-theme.
+    useEffect(() => {
+        document.body.style.background = colors.bg;
+        document.querySelector('meta[name="theme-color"]')?.setAttribute("content", colors.bg);
+    }, [colors.bg]);
+
     const ui = useMemo(() => ({
         colors: themeObj.colors,
         dark: themeObj.isDark,
