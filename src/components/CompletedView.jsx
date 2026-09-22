@@ -1,5 +1,6 @@
 import { useUi, MONO } from "./theme.js";
 import { fmtClock, fmtDateTime } from "../lib/dates.js";
+import { deadlineOf } from "../lib/outcomes.js";
 
 export default function CompletedView({ tasks }) {
     const { colors, catColor } = useUi();
@@ -12,6 +13,8 @@ export default function CompletedView({ tasks }) {
                         <div style={{ fontSize: 14, color: colors.textDim, textDecoration: "line-through", overflowWrap: "anywhere" }}>{t.text}</div>
                         <div style={{ fontSize: 11, color: colors.textDim, marginTop: 3 }}>
                             Added {fmtDateTime(t.createdAt)} &middot; Completed {fmtDateTime(t.completedAt)}
+                            {t.dueAt && <> &middot; Due {fmtDateTime(t.dueAt)}</>}
+                            {t.completedAt > deadlineOf(t) && <span style={{ color: colors.danger }}> &middot; late</span>}
                             {t.timeBonus > 0 && <> &middot; ⏱ {fmtClock(t.timedSeconds)} focused</>}
                         </div>
                     </div>

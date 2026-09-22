@@ -15,6 +15,7 @@ import CalendarView from "./components/CalendarView.jsx";
 import CustomizationView from "./components/CustomizationView.jsx";
 import BadgesView from "./components/BadgesView.jsx";
 import SettingsView from "./components/SettingsView.jsx";
+import WeeklySummaryView from "./components/WeeklySummaryView.jsx";
 import GeneralSettings from "./components/settings/GeneralSettings.jsx";
 import AiSettings from "./components/settings/AiSettings.jsx";
 import GuidedHandSettings from "./components/settings/GuidedHandSettings.jsx";
@@ -23,7 +24,7 @@ import KeywordsSettings from "./components/settings/KeywordsSettings.jsx";
 import DeveloperSettings from "./components/settings/DeveloperSettings.jsx";
 import SaveFileSettings from "./components/settings/SaveFileSettings.jsx";
 
-const VIEW_TITLES = { quests: "Questlog", completed: "Completed", calendar: "Calendar", badges: "Badges", customization: "Customization", settings: "Settings" };
+const VIEW_TITLES = { quests: "Questlog", summary: "Weekly summary", completed: "Completed tasks", calendar: "Calendar", badges: "Badges", customization: "Customization", settings: "Settings" };
 
 export default function QuestLog() {
     // Read the save once, synchronously, so every piece of state starts from it.
@@ -78,10 +79,10 @@ export default function QuestLog() {
     const rank = rankFor(level);
     const nRank = nextRank(level);
 
-    async function addTask(text, { startTimer }) {
+    async function addTask(text, { startTimer, dueAt }) {
         if (soundEnabled) playCreateDing();
         const id = uid();
-        const draft = { id, text, exp: null, category: null, reason: "", done: false, pending: true, createdAt: Date.now(), completedAt: null, timeBonus: 0, timedSeconds: 0 };
+        const draft = { id, text, exp: null, category: null, reason: "", done: false, pending: true, createdAt: Date.now(), dueAt: dueAt || null, completedAt: null, timeBonus: 0, timedSeconds: 0 };
         setTasks((t) => [draft, ...t]);
         if (startTimer) setActiveTimer({ taskId: id, startedAt: Date.now() });
         const result = await gradeTask(text, ai);
@@ -190,8 +191,9 @@ export default function QuestLog() {
     }), [themeObj]);
 
     const menuItems = [
-        ["quests", "Quests"],
-        ["completed", "Completed"],
+        ["quests", "Questlog"],
+        ["summary", "Weekly summary"],
+        ["completed", "Completed tasks"],
         ["calendar", "Calendar"],
         ["badges", `Badges (${earnedBadgeCount}/${badges.length})`],
         ["customization", "Customization"],
@@ -256,6 +258,7 @@ export default function QuestLog() {
                         <QuestsView tasks={active} activeTimer={activeTimer} now={now} aiNotice={aiNotice} onAdd={addTask} onComplete={(id) => completeTask(id)}
                             onStopTimer={stopTimerAndComplete} onCancelTimer={() => setActiveTimer(null)} onRemove={removeTask} />
                     )}
+                    {view === "summary" && <WeeklySummaryView tasks={tasks} now={now} />}
                     {view === "completed" && <CompletedView tasks={completed} />}
                     {view === "calendar" && <CalendarView tasks={tasks} />}
                     {view === "customization" && <CustomizationView theme={theme} onSetTheme={setTheme} />}
