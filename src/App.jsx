@@ -3,6 +3,7 @@ import { THEMES } from "./lib/themes.js";
 import { levelInfo, rankFor, nextRank, timerBonusFor } from "./lib/xp.js";
 import { gradeTask, migrateAiSettings, redactAi, stripAiKeys, resolveProvider, providerProblem, DEFAULT_AI } from "./lib/providers.js";
 import { buildBadges } from "./lib/badges.js";
+import { totalAdjustment, screenTimePenalty } from "./lib/xpAdjustments.js";
 import { uid } from "./lib/dates.js";
 import { playCreateDing, playCompleteDing } from "./lib/sound.js";
 import { loadSavedState, saveState, clearSavedState } from "./lib/storage.js";
@@ -73,8 +74,7 @@ export default function QuestLog() {
 
     const totalXp = useMemo(() => {
         const earned = tasks.filter((t) => t.done).reduce((s, t) => s + (t.exp || 0), 0);
-        const penalty = screenTimeLog.reduce((s, l) => s + l.penalty, 0);
-        return Math.max(0, earned - penalty);
+        return Math.max(0, earned + totalAdjustment({ screenTimeLog }));
     }, [tasks, screenTimeLog]);
 
     const { level, into, need } = levelInfo(totalXp);
@@ -133,9 +133,7 @@ export default function QuestLog() {
     }
 
     function logScreenTime(mins) {
-        const freeMinutes = 30;
-        const overage = Math.max(0, mins - freeMinutes);
-        const penalty = Math.round(overage / 2); // -1 xp per 2 min over 30
+        const penalty = screenTimePenalty(mins);
         setScreenTimeLog((l) => [{ id: uid(), minutes: mins, penalty, at: Date.now() }, ...l].slice(0, 60));
     }
 
