@@ -4,7 +4,7 @@ import { CATS } from "../lib/grading.js";
 import { TIMER_BONUS_CAP, timerBonusFor } from "../lib/xp.js";
 import { fmtClock, fmtDateTime } from "../lib/dates.js";
 
-export default function QuestsView({ tasks, activeTimer, now, onAdd, onComplete, onStopTimer, onCancelTimer, onRemove }) {
+export default function QuestsView({ tasks, activeTimer, now, aiNotice, onAdd, onComplete, onStopTimer, onCancelTimer, onRemove }) {
     const { colors, dark, catColor } = useUi();
     const [input, setInput] = useState("");
     const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -47,6 +47,7 @@ export default function QuestsView({ tasks, activeTimer, now, onAdd, onComplete,
                 )}
             </div>
 
+            {aiNotice && <div style={{ fontSize: 11.5, color: colors.textDim, margin: "-12px 2px 14px" }}>{aiNotice}</div>}
             {tasks.length === 0 && <div style={{ color: colors.textDim, fontSize: 13.5, padding: "10px 2px" }}>No open quests. Add one above to start earning xp.</div>}
             {tasks.map((t) => {
                 const isTiming = activeTimer && activeTimer.taskId === t.id;

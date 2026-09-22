@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { THEMES } from "./lib/themes.js";
 import { levelInfo, rankFor, nextRank, timerBonusFor } from "./lib/xp.js";
-import { gradeTask } from "./lib/providers.js";
+import { gradeTask, migrateAiSettings, redactAi, stripAiKeys, resolveProvider, providerProblem, DEFAULT_AI } from "./lib/providers.js";
 import { buildBadges } from "./lib/badges.js";
 import { uid } from "./lib/dates.js";
 import { playCreateDing, playCompleteDing } from "./lib/sound.js";
@@ -23,8 +23,6 @@ import KeywordsSettings from "./components/settings/KeywordsSettings.jsx";
 import DeveloperSettings from "./components/settings/DeveloperSettings.jsx";
 import SaveFileSettings from "./components/settings/SaveFileSettings.jsx";
 
-const EMPTY_PROVIDER = { endpoint: "", apiKey: "", model: "" };
-
 const VIEW_TITLES = { quests: "Questlog", completed: "Completed", calendar: "Calendar", badges: "Badges", customization: "Customization", settings: "Settings" };
 
 export default function QuestLog() {
@@ -32,8 +30,7 @@ export default function QuestLog() {
     const [saved] = useState(() => loadSavedState() || {});
     const [theme, setTheme] = useState(saved.theme || "dark");
     const [tasks, setTasks] = useState(saved.tasks || []);
-    const [aiMode, setAiMode] = useState(saved.aiMode || "builtin");
-    const [customProvider, setCustomProvider] = useState(saved.customProvider || EMPTY_PROVIDER);
+    const [ai, setAi] = useState(() => migrateAiSettings(saved));
     const [screenTimeLog, setScreenTimeLog] = useState(saved.screenTimeLog || []);
     const [activeTimer, setActiveTimer] = useState(saved.activeTimer || null); // { taskId, startedAt }
     const [soundEnabled, setSoundEnabled] = useState(saved.soundEnabled !== false);
@@ -50,16 +47,22 @@ export default function QuestLog() {
         return () => clearInterval(iv);
     }, [activeTimer]);
 
-    const snapshot = { tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, soundEnabled };
+    const snapshot = { tasks, theme, ai, screenTimeLog, activeTimer, soundEnabled };
     useEffect(() => {
-        saveState({ tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, soundEnabled });
-    }, [tasks, theme, aiMode, customProvider, screenTimeLog, activeTimer, soundEnabled]);
+        saveState({ tasks, theme, ai, screenTimeLog, activeTimer, soundEnabled });
+    }, [tasks, theme, ai, screenTimeLog, activeTimer, soundEnabled]);
 
-    function applyState(d) {
+    // Imported saves carry no API keys, so keep the ones already on this device.
+    function applyState(d, { keepKeys = false } = {}) {
         setTasks(d.tasks || []);
         setTheme(d.theme || "dark");
-        setAiMode(d.aiMode || "builtin");
-        setCustomProvider(d.customProvider || EMPTY_PROVIDER);
+        const nextAi = d.ai || d.aiMode ? migrateAiSettings(d) : DEFAULT_AI;
+        setAi((cur) => {
+            if (!keepKeys) return nextAi;
+            const configs = { ...nextAi.configs };
+            for (const [id, cfg] of Object.entries(cur.configs)) configs[id] = { ...configs[id], apiKey: configs[id]?.apiKey || cfg.apiKey };
+            return { ...nextAi, configs };
+        });
         setScreenTimeLog(d.screenTimeLog || []);
         setActiveTimer(d.activeTimer || null);
         setSoundEnabled(d.soundEnabled !== false);
@@ -81,7 +84,15 @@ export default function QuestLog() {
         const draft = { id, text, exp: null, category: null, reason: "", done: false, pending: true, createdAt: Date.now(), completedAt: null, timeBonus: 0, timedSeconds: 0 };
         setTasks((t) => [draft, ...t]);
         if (startTimer) setActiveTimer({ taskId: id, startedAt: Date.now() });
-        const result = await gradeTask(text, aiMode, customProvider);
+        const result = await gradeTask(text, ai);
+        setTasks((t) => t.map((tk) => (tk.id === id ? { ...tk, ...result, pending: false } : tk)));
+    }
+
+    async function regradeTask(id) {
+        const task = tasks.find((t) => t.id === id);
+        if (!task || task.done) return;
+        setTasks((t) => t.map((tk) => (tk.id === id ? { ...tk, pending: true } : tk)));
+        const result = await gradeTask(task.text, ai);
         setTasks((t) => t.map((tk) => (tk.id === id ? { ...tk, ...result, pending: false } : tk)));
     }
 
@@ -122,7 +133,7 @@ export default function QuestLog() {
     }
 
     function exportSave() {
-        const payload = { saveVersion: 2, exportedAt: Date.now(), app: "questlog", data: snapshot };
+        const payload = { saveVersion: 3, exportedAt: Date.now(), app: "questlog", data: { ...snapshot, ai: stripAiKeys(ai) } };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -143,7 +154,7 @@ export default function QuestLog() {
                 const parsed = JSON.parse(reader.result);
                 const d = parsed.data || parsed;
                 if (!Array.isArray(d.tasks)) throw new Error("Missing tasks array.");
-                applyState(d);
+                applyState(d, { keepKeys: true });
                 setImportStatus({ ok: true, msg: `Loaded save (${d.tasks.length} tasks).` });
             } catch {
                 setImportStatus({ ok: false, msg: "Couldn't read that file - is it a Questlog save?" });
@@ -159,6 +170,11 @@ export default function QuestLog() {
         applyState({});
         setImportStatus({ ok: true, msg: "Everything reset." });
     }
+
+    const provider = resolveProvider(ai);
+    const aiNotice = !provider
+        ? "Grading with local keyword rules. Connect an AI in Settings → AI engine."
+        : providerProblem(provider) ? `AI grading paused: ${providerProblem(provider)}` : null;
 
     const active = tasks.filter((t) => !t.done);
     const completed = tasks.filter((t) => t.done).sort((a, b) => b.completedAt - a.completedAt);
@@ -184,15 +200,15 @@ export default function QuestLog() {
 
     const settingsSections = [
         { id: "general", label: "General", render: () => <GeneralSettings themeLabel={themeObj.label} soundEnabled={soundEnabled} onSetSound={setSoundEnabled} rank={rank} /> },
-        { id: "ai", label: "AI engine", render: () => <AiSettings aiMode={aiMode} onSetAiMode={setAiMode} customProvider={customProvider} onSetCustomProvider={setCustomProvider} /> },
-        { id: "guided", label: "Guided hand", render: () => <GuidedHandSettings tasks={tasks} /> },
+        { id: "ai", label: "AI engine", render: () => <AiSettings ai={ai} onSetAi={setAi} /> },
+        { id: "guided", label: "Guided hand", render: () => <GuidedHandSettings tasks={tasks} onRegrade={regradeTask} /> },
         { id: "screentime", label: "Screen time", render: () => <ScreenTimeSettings screenTimeLog={screenTimeLog} onLog={logScreenTime} /> },
         { id: "keywords", label: "Keywords", render: () => <KeywordsSettings /> },
         {
             id: "dev", label: "Developer", render: () => (
                 <DeveloperSettings
-                    stats={[["Total tasks", tasks.length], ["Active", active.length], ["Completed", completed.length], ["Badges earned", `${earnedBadgeCount} / ${badges.length}`], ["Level", level], ["Total XP", totalXp], ["Theme", themeObj.label], ["AI mode", aiMode]]}
-                    payload={{ ...snapshot, customProvider: { ...customProvider, apiKey: customProvider.apiKey ? "***" : "" } }} />
+                    stats={[["Total tasks", tasks.length], ["Active", active.length], ["Completed", completed.length], ["Badges earned", `${earnedBadgeCount} / ${badges.length}`], ["Level", level], ["Total XP", totalXp], ["Theme", themeObj.label], ["AI provider", resolveProvider(ai)?.label || "Off"]]}
+                    payload={{ ...snapshot, ai: redactAi(ai) }} />
             ),
         },
         { id: "save", label: "Save file", render: () => <SaveFileSettings onExport={exportSave} onImportFile={importSave} onReset={resetSave} status={importStatus} /> },
@@ -237,7 +253,7 @@ export default function QuestLog() {
                     <LevelCard totalXp={totalXp} level={level} into={into} need={need} rank={rank} nRank={nRank} />
 
                     {view === "quests" && (
-                        <QuestsView tasks={active} activeTimer={activeTimer} now={now} onAdd={addTask} onComplete={(id) => completeTask(id)}
+                        <QuestsView tasks={active} activeTimer={activeTimer} now={now} aiNotice={aiNotice} onAdd={addTask} onComplete={(id) => completeTask(id)}
                             onStopTimer={stopTimerAndComplete} onCancelTimer={() => setActiveTimer(null)} onRemove={removeTask} />
                     )}
                     {view === "completed" && <CompletedView tasks={completed} />}
