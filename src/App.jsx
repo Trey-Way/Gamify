@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { THEMES } from "./lib/themes.js";
 import { levelInfo, rankFor, nextRank, timerBonusFor } from "./lib/xp.js";
 import { gradeTask, migrateAiSettings, redactAi, stripAiKeys, resolveProvider, providerProblem, DEFAULT_AI } from "./lib/providers.js";
@@ -6,6 +6,7 @@ import { buildBadges } from "./lib/badges.js";
 import { totalAdjustment, screenTimePenalty } from "./lib/xpAdjustments.js";
 import { uid } from "./lib/dates.js";
 import { playCreateDing, playCompleteDing } from "./lib/sound.js";
+import { DEFAULT_PUSH, buildPushSnapshot, syncPush, refreshSubscription, disablePush } from "./lib/push.js";
 import { loadSavedState, saveState, clearSavedState, loadNewerIdbState } from "./lib/storage.js";
 import { ThemeCtx, SERIF } from "./components/theme.js";
 import LevelCard from "./components/LevelCard.jsx";
@@ -24,6 +25,7 @@ import ScreenTimeSettings from "./components/settings/ScreenTimeSettings.jsx";
 import KeywordsSettings from "./components/settings/KeywordsSettings.jsx";
 import DeveloperSettings from "./components/settings/DeveloperSettings.jsx";
 import SaveFileSettings from "./components/settings/SaveFileSettings.jsx";
+import NotificationsSettings from "./components/settings/NotificationsSettings.jsx";
 
 const VIEW_TITLES = { quests: "Questlog", summary: "Weekly summary", completed: "Completed tasks", calendar: "Calendar", badges: "Badges", customization: "Customization", settings: "Settings" };
 
@@ -37,6 +39,8 @@ export default function QuestLog() {
     const [screenTimeLog, setScreenTimeLog] = useState(saved.screenTimeLog || []);
     const [activeTimer, setActiveTimer] = useState(saved.activeTimer || null); // { taskId, startedAt }
     const [soundEnabled, setSoundEnabled] = useState(saved.soundEnabled !== false);
+    const [push, setPush] = useState(() => ({ ...DEFAULT_PUSH, ...(saved.push || {}), serverUrl: saved.push?.serverUrl || DEFAULT_PUSH.serverUrl }));
+    const [pushLost, setPushLost] = useState(false);
     // Notifications deep-link with ?view=summary etc.
     const [view, setView] = useState(() => {
         const v = new URLSearchParams(window.location.search).get("view");
@@ -63,10 +67,39 @@ export default function QuestLog() {
         return () => { cancelled = true; };
     }, [savedAt]);
 
-    const snapshot = { tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled };
+    const snapshot = { tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled, push };
     useEffect(() => {
-        saveState({ tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled });
-    }, [tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled]);
+        saveState({ tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled, push });
+    }, [tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled, push]);
+
+    // Push: on open, hand the worker this device's current subscription
+    // (browsers can rotate it), then keep its quest snapshot fresh. Syncs
+    // are debounced so a burst of edits is one write to the worker's KV.
+    const pushSnapshotJson = useMemo(() => {
+        const data = buildPushSnapshot(tasks, now);
+        delete data.generatedAt; // compare content only
+        return JSON.stringify(data);
+    }, [tasks, now]);
+    const lastSynced = useRef(null);
+    useEffect(() => {
+        if (!push.id || !push.serverUrl) return;
+        refreshSubscription(push.serverUrl, push.id)
+            .then((ok) => setPushLost(!ok))
+            .catch((e) => { if (e.status === 404) setPushLost(true); });
+    }, [push.id, push.serverUrl]);
+    useEffect(() => {
+        if (!push.id || !push.serverUrl || lastSynced.current === pushSnapshotJson) return;
+        const send = (opts) => {
+            lastSynced.current = pushSnapshotJson;
+            syncPush(push.serverUrl, push.id, { snapshot: { ...JSON.parse(pushSnapshotJson), generatedAt: Date.now() } }, opts)
+                .catch((e) => { lastSynced.current = null; if (e.status === 404) setPushLost(true); });
+        };
+        const timer = setTimeout(send, 10000);
+        // Flush right away if the app is being backgrounded/closed.
+        const onHide = () => { if (document.visibilityState === "hidden") { clearTimeout(timer); send({ keepalive: true }); } };
+        document.addEventListener("visibilitychange", onHide);
+        return () => { clearTimeout(timer); document.removeEventListener("visibilitychange", onHide); };
+    }, [pushSnapshotJson, push.id, push.serverUrl]);
 
     // Imported saves carry no API keys, so keep the ones already on this device.
     function applyState(d, { keepKeys = false } = {}) {
@@ -151,7 +184,8 @@ export default function QuestLog() {
     }
 
     function exportSave() {
-        const payload = { saveVersion: 3, exportedAt: Date.now(), app: "questlog", data: { ...snapshot, ai: stripAiKeys(ai) } };
+        // Keys and this device's push subscription id stay on this device.
+        const payload = { saveVersion: 3, exportedAt: Date.now(), app: "questlog", data: { ...snapshot, ai: stripAiKeys(ai), push: { ...push, id: null } } };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -185,6 +219,8 @@ export default function QuestLog() {
     function resetSave() {
         if (!window.confirm("Reset all Questlog data? This deletes every quest, badge progress, and setting. This can't be undone unless you've exported a save file.")) return;
         clearSavedState();
+        disablePush(push.serverUrl, push.id);
+        setPush({ ...DEFAULT_PUSH });
         applyState({});
         setImportStatus({ ok: true, msg: "Everything reset." });
     }
@@ -226,6 +262,7 @@ export default function QuestLog() {
     const settingsSections = [
         { id: "general", label: "General", render: () => <GeneralSettings themeLabel={themeObj.label} soundEnabled={soundEnabled} onSetSound={setSoundEnabled} rank={rank} /> },
         { id: "ai", label: "AI engine", render: () => <AiSettings ai={ai} onSetAi={setAi} /> },
+        { id: "notifications", label: "Notifications", render: () => <NotificationsSettings push={push} onSetPush={setPush} tasks={tasks} lost={pushLost} /> },
         { id: "guided", label: "Guided hand", render: () => <GuidedHandSettings tasks={tasks} onRegrade={regradeTask} /> },
         { id: "screentime", label: "Screen time", render: () => <ScreenTimeSettings screenTimeLog={screenTimeLog} onLog={logScreenTime} /> },
         { id: "keywords", label: "Keywords", render: () => <KeywordsSettings /> },
@@ -233,7 +270,7 @@ export default function QuestLog() {
             id: "dev", label: "Developer", render: () => (
                 <DeveloperSettings
                     stats={[["Total tasks", tasks.length], ["Active", active.length], ["Completed", completed.length], ["Notes", notes.length], ["Badges earned", `${earnedBadgeCount} / ${badges.length}`], ["Level", level], ["Total XP", totalXp], ["Theme", themeObj.label], ["AI provider", resolveProvider(ai)?.label || "Off"]]}
-                    payload={{ ...snapshot, ai: redactAi(ai) }} />
+                    payload={{ ...snapshot, ai: redactAi(ai), push: { ...push, id: push.id ? "***" : null } }} />
             ),
         },
         { id: "save", label: "Save file", render: () => <SaveFileSettings onExport={exportSave} onImportFile={importSave} onReset={resetSave} status={importStatus} /> },
