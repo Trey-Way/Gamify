@@ -1,0 +1,26 @@
+# Questlog push worker - see ../README.md ("Push notifications") for setup.
+name = "questlog-push"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Check every 15 minutes which subscribers are due a morning plan,
+# streak check or evening check-in in their own time zone.
+[triggers]
+crons = ["*/15 * * * *"]
+
+# Create with:  npx wrangler kv namespace create SUBSCRIPTIONS
+# then paste the id it prints here.
+[[kv_namespaces]]
+binding = "SUBSCRIPTIONS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+[vars]
+# Comma-separated origins allowed to call the API: your deployed Questlog
+# URL plus local dev/preview. "*" allows any origin (not recommended).
+ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:4173"
+# Contact for push services, as mailto: or https: URL.
+VAPID_SUBJECT = "mailto:you@example.com"
+
+# Secrets (never commit these) - set with:
+#   npx wrangler secret put VAPID_PUBLIC_KEY
+#   npx wrangler secret put VAPID_PRIVATE_KEY
