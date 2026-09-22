@@ -32,6 +32,7 @@ export default function QuestLog() {
     const [theme, setTheme] = useState(saved.theme || "dark");
     const [tasks, setTasks] = useState(saved.tasks || []);
     const [ai, setAi] = useState(() => migrateAiSettings(saved));
+    const [notes, setNotes] = useState(saved.notes || []); // calendar notes: { id, text, createdAt }
     const [screenTimeLog, setScreenTimeLog] = useState(saved.screenTimeLog || []);
     const [activeTimer, setActiveTimer] = useState(saved.activeTimer || null); // { taskId, startedAt }
     const [soundEnabled, setSoundEnabled] = useState(saved.soundEnabled !== false);
@@ -48,14 +49,15 @@ export default function QuestLog() {
         return () => clearInterval(iv);
     }, [activeTimer]);
 
-    const snapshot = { tasks, theme, ai, screenTimeLog, activeTimer, soundEnabled };
+    const snapshot = { tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled };
     useEffect(() => {
-        saveState({ tasks, theme, ai, screenTimeLog, activeTimer, soundEnabled });
-    }, [tasks, theme, ai, screenTimeLog, activeTimer, soundEnabled]);
+        saveState({ tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled });
+    }, [tasks, notes, theme, ai, screenTimeLog, activeTimer, soundEnabled]);
 
     // Imported saves carry no API keys, so keep the ones already on this device.
     function applyState(d, { keepKeys = false } = {}) {
         setTasks(d.tasks || []);
+        setNotes(d.notes || []);
         setTheme(d.theme || "dark");
         const nextAi = d.ai || d.aiMode ? migrateAiSettings(d) : DEFAULT_AI;
         setAi((cur) => {
@@ -124,6 +126,10 @@ export default function QuestLog() {
     function removeTask(id) {
         setTasks((t) => t.filter((tk) => tk.id !== id));
         if (activeTimer?.taskId === id) setActiveTimer(null);
+    }
+
+    function addNote(text, createdAt) {
+        setNotes((n) => [...n, { id: uid(), text, createdAt }]);
     }
 
     function logScreenTime(mins) {
@@ -209,7 +215,7 @@ export default function QuestLog() {
         {
             id: "dev", label: "Developer", render: () => (
                 <DeveloperSettings
-                    stats={[["Total tasks", tasks.length], ["Active", active.length], ["Completed", completed.length], ["Badges earned", `${earnedBadgeCount} / ${badges.length}`], ["Level", level], ["Total XP", totalXp], ["Theme", themeObj.label], ["AI provider", resolveProvider(ai)?.label || "Off"]]}
+                    stats={[["Total tasks", tasks.length], ["Active", active.length], ["Completed", completed.length], ["Notes", notes.length], ["Badges earned", `${earnedBadgeCount} / ${badges.length}`], ["Level", level], ["Total XP", totalXp], ["Theme", themeObj.label], ["AI provider", resolveProvider(ai)?.label || "Off"]]}
                     payload={{ ...snapshot, ai: redactAi(ai) }} />
             ),
         },
@@ -260,7 +266,7 @@ export default function QuestLog() {
                     )}
                     {view === "summary" && <WeeklySummaryView tasks={tasks} now={now} />}
                     {view === "completed" && <CompletedView tasks={completed} />}
-                    {view === "calendar" && <CalendarView tasks={tasks} />}
+                    {view === "calendar" && <CalendarView tasks={tasks} notes={notes} now={now} onAddNote={addNote} onDeleteNote={(id) => setNotes((n) => n.filter((x) => x.id !== id))} />}
                     {view === "customization" && <CustomizationView theme={theme} onSetTheme={setTheme} />}
                     {view === "badges" && <BadgesView badges={badges} />}
                     {view === "settings" && <SettingsView sections={settingsSections} />}

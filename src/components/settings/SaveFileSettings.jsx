@@ -8,7 +8,7 @@ export default function SaveFileSettings({ onExport, onImportFile, onReset, stat
     return (
         <Panel>
             <Hint style={{ marginBottom: 16 }}>
-                Everything - quests, completed history, badge progress, screen time log, theme, and
+                Everything - quests, completed history, calendar notes, badge progress, screen time log, theme, and
                 AI settings - lives in one save file (API keys are left out for safety). Export it to back it up or move it to another
                 device; import to restore it. Progress also autosaves to this browser continuously,
                 with a redundant backup copy in case one write gets interrupted.
